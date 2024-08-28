@@ -1,0 +1,3 @@
+[submodule "third-party/2-CH-RS485-HAT"]
+	path = third-party/2-CH-RS485-HAT
+	url = https://github.com/jakepu/2-CH-RS485-HAT.git
