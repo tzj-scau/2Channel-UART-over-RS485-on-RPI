@@ -27,7 +27,7 @@ def main():
     try:
         ser = serial.Serial(PORT, BAUD)
         logging.info('Testing serial connection...')
-        test_serial_connection(ser)
+        # test_serial_connection(ser)
         
         # default addr is 1 for the RSDS21 module
         instrument = minimalmodbus.Instrument(ser, slaveaddress=1) 
@@ -41,6 +41,9 @@ def main():
             temperature2 = instrument.read_register(0x40, functioncode=3, number_of_decimals=1)
             temperature3 = instrument.read_register(0x00, functioncode=4, number_of_decimals=1)
             print(f"Temperature: {temperature} °C")
+            print(f"Temperature: {temperature1} °C")
+            print(f"Temperature: {temperature2} °C")
+            print(f"Temperature: {temperature3} °C")
         except Exception as e:
             logging.error(f"Failed to read temperature: {e}")
 
