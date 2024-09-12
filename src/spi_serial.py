@@ -6,6 +6,7 @@ import subprocess
 import threading
 import logging
 
+
 # 配置logging
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(levelname)s - %(message)s')
@@ -75,7 +76,7 @@ def main():
     logging.info("RS485 object instantiated.")
     
     # baud rate 9600, databits 8, stop bits 1, parity bit disable
-    rs485.RS485_CH1_begin(Baud=BAUD, num_stop_config=0, word_len_config=0x11)
+    rs485.RS485_CH1_begin(Baud=BAUD, num_stop_config=0, word_len_config=0b11)
     logging.debug("RS485 channel 1 initialized with baud rate 9600.")
     time.sleep(0.01)
     
@@ -87,11 +88,10 @@ def main():
 
     try:
         while True:
-            logging.debug("Main loop running. Checking thread statuses.")
-            time.sleep(5)  # 主循环内每隔5秒输出一次线程状态
-            logging.debug(f"Read thread alive: {read_thread.is_alive()}")
-            logging.debug(f"Write thread alive: {write_thread.is_alive()}")
-            logging.debug("Checking data on serial port...")
+            time.sleep(20)  # 主循环内每隔5秒输出一次线程状态
+            # logging.debug(f"Read thread alive: {read_thread.is_alive()}")
+            # logging.debug(f"Write thread alive: {write_thread.is_alive()}")
+            # logging.debug("Checking data on serial port...")
             if ser.in_waiting > 0:
                 logging.debug(f"Data available on serial port: {ser.in_waiting} bytes")
             else:
