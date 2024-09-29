@@ -1,0 +1,9 @@
+{
+  "port": "/tmp/rs485-pair",
+  "baud": 115200,
+  "motor_address": 1,
+  "speed": 1000,
+  "acceleration": 50,
+  "positions": [0, 90, 180, 270, 360],
+  "multi_sync_enabled": false
+}
