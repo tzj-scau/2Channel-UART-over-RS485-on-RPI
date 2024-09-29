@@ -6,7 +6,7 @@ import time
 # 开启调试模式，查看完整的 Modbus 通讯数据帧
 # minimalmodbus.DEBUG = True
 # minimalmodbus.logger.setLevel(logging.DEBUG)
-from spi_serial_sys_dev import VIRTUAL_PORT_PAIR, BAUD
+from spi_serial_sys_dev import VIRTUAL_PORT,VIRTUAL_PORT_PAIR, BAUD
 
 def setup_instrument(port, baud, slave_address=1):
     try:
@@ -31,7 +31,8 @@ def read_temperature(instrument):
 def main():
     logging.basicConfig(level=logging.INFO)
     
-    instrument = setup_instrument(VIRTUAL_PORT_PAIR, BAUD)
+    # instrument = setup_instrument(VIRTUAL_PORT_PAIR, BAUD)
+    instrument = setup_instrument(VIRTUAL_PORT, BAUD)
     if not instrument:
         return
 
