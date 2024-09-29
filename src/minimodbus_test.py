@@ -38,11 +38,11 @@ def main():
     logging.info('Instrument setup successful')
     logging.info(f'Instrument info: {instrument}')
 
-    # while True:
-    temperature = read_temperature(instrument)
-    if temperature is not None:
-        print(f"Temperature: {temperature} °C")
-    time.sleep(2)  # 每2秒读取一次温度
+    while True:
+        temperature = read_temperature(instrument)
+        if temperature is not None:
+            print(f"Temperature: {temperature} °C")
+        time.sleep(2)  # 每2秒读取一次温度
 
 if __name__ == '__main__':
     main()

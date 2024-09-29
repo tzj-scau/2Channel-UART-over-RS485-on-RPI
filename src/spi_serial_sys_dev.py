@@ -13,6 +13,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 SYSTEM_PORT = '/dev/ttySC0'
 VIRTUAL_PORT = '/tmp/rs485'
 VIRTUAL_PORT_PAIR = '/tmp/rs485-pair'
+# BAUD = 115200
 BAUD = 9600
 RETRY_DELAY = 5  # 重试连接的时间间隔（秒）
 
