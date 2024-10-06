@@ -13,6 +13,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 SYSTEM_PORT = '/dev/ttySC0'
 VIRTUAL_PORT = '/tmp/vserial1'
 VIRTUAL_PORT_PAIR = '/tmp/vserial2'
+# BAUD_RATE = 115200
 BAUD_RATE = 9600
 
 class EpollSerialHandler:

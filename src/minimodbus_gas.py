@@ -9,9 +9,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Sensor addresses
 SENSOR_ADDRESSES = {
-    'CO2': 1,
-    'H2S': 2,
-    'NH3': 3,
+    'CO2': 5,
+    'H2S': 6,
+    'NH3': 7,
     'CO': 4
 }
 

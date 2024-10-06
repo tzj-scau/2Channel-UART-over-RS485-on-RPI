@@ -11,7 +11,8 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 # 全局常量
 SYSTEM_PORT = '/dev/ttySC0'
-VIRTUAL_PORT = '/tmp/rs485'
+
+# = '/tmp/rs485'
 VIRTUAL_PORT_PAIR = '/tmp/rs485-pair'
 # BAUD = 115200
 BAUD = 9600

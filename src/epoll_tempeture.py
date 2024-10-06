@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 VIRTUAL_PORT_PAIR = '/tmp/vserial2'
 BAUD_RATE = 9600
-SLAVE_ADDRESS = 1
+SLAVE_ADDRESS = 3
 TEMPERATURE_REGISTER = 0x00
 READ_INTERVAL = 2  # 读取间隔，单位为秒
 
