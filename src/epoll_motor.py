@@ -1,162 +1,206 @@
 import minimalmodbus
 import serial
-import logging
-import time
 import struct
+import math
+import time
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Constants
+SLAVE_ADDRESS = 1
+BAUD_RATE = 9600
+VIRTUAL_PORT = '/tmp/vserial2'
 
-VIRTUAL_PORT_PAIR = '/tmp/vserial2'
+# Function codes
+FUNCTION_READ_INPUT_REGISTERS = 0x04
+FUNCTION_WRITE_SINGLE_REGISTER = 0x06
+FUNCTION_WRITE_MULTIPLE_REGISTERS = 0x10
 
+# Register addresses (based on the Modbus-RTU instruction document)
+class Registers:
+    # Read registers
+    VERSION = 0x0010
+    RESISTANCE_INDUCTANCE = 0x0012
+    PID_PARAMS = 0x0014
+    HOMING_PARAMS = 0x001C
+    BUS_VOLTAGE = 0x0024
+    BUS_CURRENT = 0x0026
+    PHASE_CURRENT = 0x0027
+    ENCODER_RAW = 0x0029
+    ENCODER_CALIBRATED = 0x0034
+    TARGET_POSITION = 0x003C
+    VELOCITY = 0x0044
+    POSITION = 0x0046
+    POSITION_ERROR = 0x004A
+    TEMPERATURE = 0x004E
+    MOTOR_STATUS = 0x0050
+    HOMING_STATUS = 0x0052
+    SYSTEM_STATUS = 0x0078
+    DRIVER_PARAMS = 0x0062
+    STOP = 0x00FE
 
-class MinimalModbusMotorControl:
-    def __init__(self, port="/tmp/vserial2", baudrate=9600, motor_ids=None):
-        self.port = port
-        self.baudrate = baudrate
-        self.motor_ids = motor_ids if motor_ids else [1, 2]
-        self.instruments = {}
-        self.setup_instruments()
+    # Write registers
+    CALIBRATE_ENCODER = 0x0006
+    CLEAR_POSITION = 0x000A
+    CLEAR_CLOG = 0x000E
+    FACTORY_RESET = 0x000F
+    SET_SUBDIVISION = 0x00A0
+    SET_ID = 0x00A2
+    SET_PID = 0x00B0
+    SET_HOMING_PARAMS = 0x00C0
+    ENABLE_CONTROL = 0x00E0
+    TORQUE_CONTROL = 0x00E2
+    VELOCITY_CONTROL = 0x00E6
+    POSITION_CONTROL_DIRECT = 0x00F0
+    POSITION_CONTROL_PLANNED = 0x00F6
+    STOP = 0x00FE
+    SYNC_MOVE = 0x00FF
+    SET_HOMING_POINT = 0x00D8
+    TRIGGER_HOMING = 0x00DA
+    INTERRUPT_HOMING = 0x00DC
+    MODIFY_DRIVER_PARAMS = 0x00A8
 
-    def setup_instruments(self):
-        for motor_id in self.motor_ids:
-            try:
-                instrument = minimalmodbus.Instrument(self.port, slaveaddress=motor_id)
-                instrument.serial.baudrate = self.baudrate
-                instrument.serial.timeout = 0.5
-                instrument.mode = minimalmodbus.MODE_RTU
-                instrument.debug=True
-                self.instruments[motor_id] = instrument
-                logging.info(f'Instrument setup successful for motor {motor_id}')
-            except serial.SerialException as e:
-                logging.error(f"Could not open serial port for motor {motor_id}: {e}")
+class Motor:
+    def __init__(self, port, slave_address, baud_rate=9600):
+        self.instrument = minimalmodbus.Instrument(port, slave_address)
+        self.instrument.serial.baudrate = baud_rate
+        self.instrument.serial.timeout = 1
+        self.instrument.mode = minimalmodbus.MODE_RTU
+        self.instrument.debug = True
 
-    def _write_registers(self, motor_id, values):
+    def enable_motor(self, enable=True, sync_flag=False):
+        values = [0xAB << 8 | 0x01 if enable else 0x00, (0x01 if sync_flag else 0x00) << 8 | 0x00]
         try:
-            self.instruments[motor_id].write_registers(motor_id, values)
-            self._debug_output(motor_id, values)
-        except Exception as e:
-            logging.error(f"Failed to write registers for motor {motor_id}: {e}")
+            self.instrument.write_registers(Registers.ENABLE_CONTROL, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            print(f"Motor {'enabled' if enable else 'disabled'}.")
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during enable_motor, continuing...")
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during enable_motor: {e}, continuing...")
 
-    def _read_registers(self, motor_id, count):
+    def stop(self, sync_flag=False):
+        value = (0x98 << 8) | (0x01 if sync_flag else 0x00)
         try:
-            return self.instruments[motor_id].read_registers(0, count)
-        except Exception as e:
-            logging.error(f"Failed to read registers for motor {motor_id}: {e}")
-            return None
+            self.instrument.write_register(Registers.STOP, value, functioncode=FUNCTION_WRITE_SINGLE_REGISTER)
+            print("Motor stopped.")
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during stop, continuing...")
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during stop: {e}, continuing...")
 
-    def _debug_output(self, motor_id, values):
-        hex_values = ' '.join([f'{value:02X}' for value in values])
-        logging.info(f"485 command for motor {motor_id}: {hex_values}")
+    def trigger_homing(self, mode=0, sync_flag=False):
+        value = (mode << 8) | (0x01 if sync_flag else 0x00)
+        try:
+            self.instrument.write_register(Registers.TRIGGER_HOMING, value, functioncode=FUNCTION_WRITE_SINGLE_REGISTER)
+            print("Homing triggered.")
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during trigger_homing, continuing...")
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during trigger_homing: {e}, continuing...")
 
-    def read_sys_params(self, motor_id):
-        # 构造读取系统参数的请求
-        request = [
-            0x04,  # 功能码
-            0x00, 0x78,  # 寄存器地址
-            0x00, 0x11,  # 寄存器数量
+    def set_velocity(self, direction, velocity, acceleration=300, sync_flag=False):
+        # direction: 0 for CW, 1 for CCW
+        abs_velocity = abs(int(velocity))
+        values = [direction, acceleration, abs_velocity, 0x01 if sync_flag else 0x00]
+        try:
+            self.instrument.write_registers(Registers.VELOCITY_CONTROL, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            print(f"Velocity set to {velocity} with acceleration {acceleration}.")
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during set_velocity, continuing...")
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during set_velocity: {e}, continuing...")
+
+    def set_position(self, direction, counts, velocity, relative=True, sync_flag=False):
+        # counts: target position in counts
+        # velocity: target velocity in motor units
+        # direction: 0 for CW, 1 for CCW
+        low_word = counts & 0xFFFF
+        high_word = (counts >> 16) & 0xFFFF
+        values = [
+            direction,
+            velocity * 10,
+            low_word,
+            high_word,
+            ((0x00 if relative else 0x01) << 8) | (0x01 if sync_flag else 0x00)
         ]
-        self._write_registers(motor_id, request)
-        time.sleep(0.1)
-        response = self._read_registers(motor_id, 39)  # 读取39个寄存器（如图中注释所示）
-        
-        if response:
-            # 解析响应数据
-            params = {
-                "总字节数": response[2],
-                "参数个数": response[3],
-                "总线电压": response[4] * 256 + response[5],
-                "总线电流": response[6] * 256 + response[7],
-                "相电流": response[8] * 256 + response[9],
-                "编码器原始值": response[10] * 256 + response[11],
-                "编码器线性值": response[12] * 256 + response[13],
-                "目标位置符号": response[14] * 256 + response[15],
-                "电机目标位置": response[16] * 256 + response[17],
-                "实时转速符号": response[18] * 256 + response[19],
-                "电机实时转速": response[20] * 256 + response[21],
-                "实时位置符号": response[22] * 256 + response[23],
-                "电机实时位置": response[24] * 256 + response[25],
-                "位置误差符号": response[26] * 256 + response[27],
-                "实时温度符号": response[28] * 256 + response[29],
-                "实时温度": response[30] * 256 + response[31],
-                "回零状态标志位": response[32] * 256 + response[33],
-                "电机状态标志位": response[34] * 256 + response[35],
-            }
-            return params
-        else:
+        try:
+            self.instrument.write_registers(Registers.POSITION_CONTROL_DIRECT, values)
+            print(f"Position set to {counts} counts with velocity {velocity}.")
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during set_position, continuing...")
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during set_position: {e}, continuing...")
+
+    def set_position_planned(self, direction, counts, max_velocity, accel, decel, relative=True, sync_flag=False):
+        position_low = counts & 0xFFFF
+        position_high = (counts >> 16) & 0xFFFF
+        max_velocity_scaled = int(max_velocity * 10)
+        accel_scaled = int(accel * 10)
+        decel_scaled = int(decel * 10)
+        movement_flags = 0x0000  # 0 for relative, 1 for absolute
+        movement_flags |= (0x01 if not relative else 0x00)
+        sync_flag_value = 0x01 if sync_flag else 0x00
+        values = [
+            direction,
+            accel_scaled,
+            decel_scaled,
+            max_velocity_scaled,
+            position_low,
+            position_high,
+            (movement_flags << 8) | sync_flag_value
+        ]
+        try:
+            self.instrument.write_registers(Registers.POSITION_CONTROL_PLANNED, values)
+            print(f"Planned position set to {counts} counts with max velocity {max_velocity}.")
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during set_position_planned, continuing...")
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during set_position_planned: {e}, continuing...")
+
+    def read_position(self):
+        try:
+            result = self.instrument.read_registers(Registers.POSITION, 3, functioncode=FUNCTION_READ_INPUT_REGISTERS)
+            direction = result[0]
+            position_counts = (result[2] << 16) | result[1]
+            position_counts = -position_counts if direction else position_counts
+            print(f"Current motor position: {position_counts} counts.")
+            return position_counts
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during read_position, returning None.")
+            return None
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during read_position: {e}, returning None.")
             return None
 
-    def reset_cur_pos_to_zero(self, motor_id):
-        self._write_registers(motor_id, [0x0A, 0x6D, 0x6B])
+    def read_velocity(self):
+        try:
+            result = self.instrument.read_registers(Registers.VELOCITY, 2, functioncode=FUNCTION_READ_INPUT_REGISTERS)
+            direction = result[0]
+            velocity = result[1]
+            velocity = -velocity if direction else velocity
+            print(f"Current motor velocity: {velocity} RPM.")
+            return velocity
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during read_velocity, returning None.")
+            return None
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during read_velocity: {e}, returning None.")
+            return None
 
-    def reset_clog_pro(self, motor_id):
-        self._write_registers(motor_id, [0x0E, 0x52, 0x6B])
+    def read_motor_status(self):
+        try:
+            status = self.instrument.read_register(Registers.MOTOR_STATUS, functioncode=FUNCTION_READ_INPUT_REGISTERS)
+            status_dict = {
+                'enabled': bool(status & 0x01),
+                'in_position': bool(status & 0x02),
+                'motor_stalled': bool(status & 0x04),
+                'stall_protection': bool(status & 0x08)
+            }
+            print(f"Motor status: {status_dict}")
+            return status_dict
+        except minimalmodbus.NoResponseError:
+            print("No response from instrument during read_motor_status, returning None.")
+            return None
+        except minimalmodbus.ModbusException as e:
+            print(f"Modbus error during read_motor_status: {e}, returning None.")
+            return None
 
-    def modify_ctrl_mode(self, motor_id, save_flag, ctrl_mode):
-        self._write_registers(motor_id, [0x46, 0x69, 1 if save_flag else 0, ctrl_mode, 0x6B])
-
-    def en_control(self, motor_id, state, sync_flag):
-        self._write_registers(motor_id, [0xF3, 0xAB, 1 if state else 0, 1 if sync_flag else 0, 0x6B])
-
-    def vel_control(self, motor_id, direction, velocity, acceleration, sync_flag):
-        self._write_registers(motor_id, [0xF6, direction, velocity >> 8, velocity & 0xFF, 
-                                         acceleration, 1 if sync_flag else 0, 0x6B])
-
-    def pos_control(self, motor_id, direction, velocity, acceleration, pulse_count, relative_flag, sync_flag):
-        self._write_registers(motor_id, [0xFD, direction, velocity >> 8, velocity & 0xFF, 
-                                         acceleration, pulse_count >> 24, (pulse_count >> 16) & 0xFF, 
-                                         (pulse_count >> 8) & 0xFF, pulse_count & 0xFF, 
-                                         1 if relative_flag else 0, 1 if sync_flag else 0, 0x6B])
-
-    def stop_now(self, motor_id, sync_flag):
-        self._write_registers(motor_id, [0xFE, 0x98, 1 if sync_flag else 0, 0x6B])
-
-    def synchronous_motion(self, motor_id):
-        self._write_registers(motor_id, [0xFF, 0x66, 0x6B])
-
-    def origin_set_o(self, motor_id, save_flag):
-        self._write_registers(motor_id, [0x93, 0x88, 1 if save_flag else 0, 0x6B])
-
-    def origin_modify_params(self, motor_id, save_flag, o_mode, o_dir, o_vel, o_tm, sl_vel, sl_ma, sl_ms, pot_flag):
-        self._write_registers(motor_id, [0x4C, 0xAE, 1 if save_flag else 0, o_mode, o_dir, 
-                                         o_vel >> 8, o_vel & 0xFF, o_tm >> 24, (o_tm >> 16) & 0xFF, 
-                                         (o_tm >> 8) & 0xFF, o_tm & 0xFF, sl_vel >> 8, sl_vel & 0xFF, 
-                                         sl_ma >> 8, sl_ma & 0xFF, sl_ms >> 8, sl_ms & 0xFF, 
-                                         1 if pot_flag else 0, 0x6B])
-
-    def origin_trigger_return(self, motor_id, o_mode, sync_flag):
-        self._write_registers(motor_id, [0x9A, o_mode, 1 if sync_flag else 0, 0x6B])
-
-    def origin_interrupt(self, motor_id):
-        self._write_registers(motor_id, [0x9C, 0x48, 0x6B])
-
-    def real_time_location(self):
-        positions = {}
-        for motor_id in self.motor_ids:
-            pos = self.read_sys_params(motor_id, 'S_CPOS')
-            if pos:
-                motor_cur_pos = struct.unpack('>I', struct.pack('>HH', pos[2], pos[3]))[0] * 360.0 / 65536.0
-                if pos[1]:
-                    motor_cur_pos = -motor_cur_pos
-                positions[f'Motor{motor_id}'] = f'{motor_cur_pos:.1f}'
-            else:
-                positions[f'Motor{motor_id}'] = 'Failed to read'
-        
-        print(', '.join([f'{k}: {v}' for k, v in positions.items()]))
-        return positions
-
-def main():
-    motor_control = MinimalModbusMotorControl(motor_ids=[1,])
-
-    for motor_id in motor_control.motor_ids:
-        print(f"Reading parameters for Motor {motor_id}:")
-        params = motor_control.read_sys_params(motor_id)
-        if params:
-            for key, value in params.items():
-                print(f"  {key}: {value}")
-        else:
-            print("  Failed to read parameters")
-        print("-" * 40)
-
-if __name__ == '__main__':
-    main()
+    # Add other motor methods as needed...
