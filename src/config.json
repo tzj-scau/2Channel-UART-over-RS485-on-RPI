@@ -1,9 +1,56 @@
 {
-  "port": "/tmp/rs485-pair",
-  "baud": 115200,
-  "motor_address": 1,
-  "speed": 1000,
-  "acceleration": 50,
-  "positions": [0, 90, 180, 270, 360],
-  "multi_sync_enabled": false
+  "mqtt": {
+    "broker_address": "mqtt_broker_address",
+    "port": 1883,
+    "keepalive": 60
+  },
+  "gas_sensors": {
+    "CO2": {"port": "/tmp/vserial2", "baud_rate": 9600, "slave_address": 5, "decimal_point": 0},
+    "H2S": {"port": "/tmp/vserial2", "baud_rate": 9600, "slave_address": 6, "decimal_point": 0},
+    "NH3": {"port": "/tmp/vserial2", "baud_rate": 9600, "slave_address": 7, "decimal_point": 0},
+    "CO": {"port": "/tmp/vserial2", "baud_rate": 9600, "slave_address": 4, "decimal_point": 0}
+  },
+  "slider_robot": {
+    "port": "/tmp/vserial2",
+    "slave_address": 1,
+    "baud_rate": 9600,
+    "positions": [0, 1000, 2000, 3000]
+  },
+  "camera": {
+    "device_index": 0
+  },
+  "positions": ["A1", "A2", "B1", "B2"],
+  "data_file": "/home/pi/sensor_data.json",
+  "image_paths": {
+    "depth": "/home/pi/depth_images/depth_{timestamp}.raw",
+    "infrared": "/home/pi/infrared_images/infrared_{timestamp}.png",
+    "color": "/home/pi/color_images/color_{timestamp}.png"
+  },
+  "daily_tasks": [
+    {
+      "time": "08:00",
+      "type": "full_inspection",
+      "description": "Morning full inspection"
+    },
+    {
+      "time": "12:00",
+      "type": "quick_inspection",
+      "description": "Midday quick inspection"
+    },
+    {
+      "time": "16:00",
+      "type": "gas_only",
+      "description": "Afternoon gas check"
+    },
+    {
+      "time": "20:00",
+      "type": "full_inspection",
+      "description": "Evening full inspection"
+    }
+  ],
+  "task_types": {
+    "full_inspection": ["move", "gas", "camera", "upload"],
+    "quick_inspection": ["move", "gas", "upload"],
+    "gas_only": ["gas", "upload"]
+  }
 }

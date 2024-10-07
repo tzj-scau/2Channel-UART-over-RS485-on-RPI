@@ -3,12 +3,14 @@ import usb.util
 import struct
 import uvc
 import logging
+from rich import print
 from rich.logging import RichHandler
 import sys
 from datetime import datetime
 import numpy as np
 from PIL import Image
 import io
+import csv
 import os
 
 # 设置日志配置
@@ -157,6 +159,85 @@ SUB_FUNCTION_NAMES = {
     }
 }
 
+class InfraredDriver:
+    def __init__(self):
+        self.device = None
+        self.communication = None
+        self.protocol = None
+        self.error_handler = None
+
+    def find_device(self):
+        devices = uvc.device_list()
+        logging.info(f"Available devices: {devices}")
+
+        if not devices:
+            logging.error("No UVC devices found.")
+            return False
+
+        device_info = devices[0]
+        logging.info(f"Using device: {device_info['name']}")
+
+        vendor_id = device_info['idVendor']
+        product_id = device_info['idProduct']
+
+        self.device = usb.core.find(idVendor=vendor_id, idProduct=product_id)
+
+        if self.device is None:
+            logging.error("UVC Device not found via pyusb")
+            return False
+
+        for i in range(self.device.get_active_configuration().bNumInterfaces):
+            if self.device.is_kernel_driver_active(i):
+                try:
+                    self.device.detach_kernel_driver(i)
+                    logging.info(f"Detached kernel driver from interface {i}")
+                except usb.core.USBError as e:
+                    logging.error(f"Could not detach kernel driver from interface({i}): {str(e)}")
+                    return False
+
+        self.communication = USBCommunication(self.device)
+        self.protocol = USBProtocol(self.communication)
+        self.error_handler = ErrorCodeHandler(self.communication)
+        logging.info("UVC device connected and initialized")
+        return True
+
+    def get_protocol_version(self):
+        return self.protocol.get_protocol_version()
+
+    def get_device_info(self):
+        return self.protocol.get_device_info()
+
+    def set_system_time(self, dt=None):
+        return self.protocol.set_system_time(dt)
+
+    def get_system_time(self):
+        return self.protocol.get_system_time()
+
+    def set_image_brightness(self, channel_id, brightness):
+        self.protocol.set_image_brightness(channel_id, brightness)
+
+    def set_image_contrast(self, channel_id, contrast):
+        self.protocol.set_image_contrast(channel_id, contrast)
+
+    def perform_background_correction(self, channel_id):
+        self.protocol.perform_background_correction(channel_id)
+
+    def get_thermal_image_with_data(self, channel_id=0):
+        return self.protocol.get_thermal_image_with_data(channel_id)
+
+    def save_thermal_data(self, thermal_data, base_filename):
+        self.protocol.save_thermal_data(thermal_data, base_filename)
+
+    def get_error_code(self):
+        return self.error_handler.get_error_code()
+
+    def reboot_device(self):
+        self.protocol.reboot_device()
+
+    def reset_to_default(self):
+        self.protocol.reset_to_default()
+
+
 class USBCommunication:
     def __init__(self, device):
         self.device = device
@@ -169,7 +250,7 @@ class USBCommunication:
         b_request_name = B_REQUEST_NAMES.get(b_request, "Unknown b_request")
         cs_id_name = CS_ID_NAMES.get(cs_id, "Unknown CS_ID")
         sub_function_name = SUB_FUNCTION_NAMES.get(cs_id, {}).get(sub_function_id, "Unknown Sub-function")
-        
+
         logger.debug(f"Sending command: request_type={hex(request_type)} ({request_type_name}), "
                      f"b_request={hex(b_request)} ({b_request_name}), "
                      f"CS_ID={hex(cs_id)} ({cs_id_name}), "
@@ -182,6 +263,7 @@ class USBCommunication:
             w_index,
             data if data else length
         )
+
 
 class USBProtocol:
     def __init__(self, communication):
@@ -201,7 +283,7 @@ class USBProtocol:
             )
             return length_data[0] | (length_data[1] << 8)
         except Exception as e:
-            logger.error(f"Failed to get length for CS_ID={hex(cs_id)}, Sub-function={hex(sub_function_id)}: {e}")
+            logging.error(f"Failed to get length for CS_ID={hex(cs_id)}, Sub-function={hex(sub_function_id)}: {e}")
             return 0
 
     def switch_functionality(self, cs_id, sub_function_id):
@@ -210,17 +292,17 @@ class USBProtocol:
             try:
                 data = struct.pack('BB', cs_id, sub_function_id)
                 self.communication.send_request(
-                    SET_REQUEST_TYPE, 
-                    SET_CUR, 
-                    XU_CS_ID_COMMAND_SWITCH, 
+                    SET_REQUEST_TYPE,
+                    SET_CUR,
+                    XU_CS_ID_COMMAND_SWITCH,
                     0,
                     data=data
                 )
                 self.current_cs_id = cs_id
                 self.current_sub_function_id = sub_function_id
-                logger.debug(f"Switched to CS_ID={hex(cs_id)}, Sub-function={hex(sub_function_id)}")
+                logging.debug(f"Switched to CS_ID={hex(cs_id)}, Sub-function={hex(sub_function_id)}")
             except Exception as e:
-                logger.error(f"Failed to switch functionality: {e}")
+                logging.error(f"Failed to switch functionality: {e}")
 
     def get_protocol_version(self):
         """Gets the protocol version from the device."""
@@ -231,16 +313,18 @@ class USBProtocol:
                 XU_CS_ID_PROTOCOL_VER,
                 0
             )
-            
+
             if version_data:
+                # Convert array of integers to bytes
                 version_bytes = bytes(version_data)
+                # Decode bytes to string, stopping at null terminator
                 version_str = version_bytes.decode('ascii').rstrip('\x00')
                 return version_str
             else:
-                logger.warning("No version data received")
+                logging.warning("No version data received")
                 return None
         except Exception as e:
-            logger.error(f"Failed to get protocol version: {e}")
+            logging.error(f"Failed to get protocol version: {e}")
             return None
 
     def send_request(self, request_type, b_request, cs_id, sub_function_id, data=None):
@@ -256,11 +340,11 @@ class USBProtocol:
                 length=2
             )
             length = length_data[0] | (length_data[1] << 8)
-            logger.debug(f"length: {length}")
+            logging.debug(f"Data length: {length}")
             return length
 
         length = self.get_length(cs_id, sub_function_id)
-        logger.debug(f"length: {length}")
+        logging.debug(f"Expected data length: {length}")
 
         try:
             if b_request in [GET_CUR, GET_MIN, GET_MAX, GET_RES, GET_DEF, GET_INFO]:
@@ -291,9 +375,9 @@ class USBProtocol:
                         length=length
                     )
         except Exception as e:
-            logger.error(f"Error in send_request: {e}")
+            logging.error(f"Error in send_request: {e}")
             return None
-  
+
     # System Management Functions
     def get_device_info(self):
         """Gets the device information."""
@@ -304,28 +388,32 @@ class USBProtocol:
                 XU_CS_ID_SYSTEM,
                 SYSTEM_DEVICE_INFO
             )
-            logger.debug(f"Raw device info data: {info_data}")
-            
+            logging.debug(f"Raw device info data: {info_data}")
+
             if not info_data:
-                logger.warning("No device info data received")
+                logging.warning("No device info data received")
                 return None
 
+            # Convert array of integers to bytes and decode to ASCII
             info_str = bytes(info_data).decode('ascii', errors='ignore').rstrip('\x00')
-            logger.debug(f"Decoded device info string: {info_str}")
-            
+            logging.debug(f"Decoded device info string: {info_str}")
+
+            # Split the info string into components and remove empty elements
             components = [comp for comp in info_str.split('\x00') if comp]
-            logger.debug(f"Split components: {components}")
-            
-            fields = ["firmwareVersion", "encoderVersion", "hardwareVersion", 
-                    "deviceName", "protocolVersion", "serialNumber"]
-            
+            logging.debug(f"Split components: {components}")
+
+            # Define expected fields
+            fields = ["firmwareVersion", "encoderVersion", "hardwareVersion",
+                      "deviceName", "protocolVersion", "serialNumber"]
+
+            # Create dictionary with available data
             device_info = {field: components[i] if i < len(components) else ""
-                        for i, field in enumerate(fields)}
-            
+                           for i, field in enumerate(fields)}
+
             return device_info
 
         except Exception as e:
-            logger.error(f"Failed to get device info: {e}", exc_info=True)
+            logging.error(f"Failed to get device info: {e}", exc_info=True)
             return None
 
     def reboot_device(self):
@@ -336,6 +424,7 @@ class USBProtocol:
             XU_CS_ID_SYSTEM,
             SYSTEM_REBOOT
         )
+        logging.info("Device reboot command sent.")
 
     def reset_to_default(self):
         """Resets the device to default settings."""
@@ -345,47 +434,37 @@ class USBProtocol:
             XU_CS_ID_SYSTEM,
             SYSTEM_RESET
         )
-
-    def set_hardware_server(self, usb_mode):
-        """Sets the hardware server parameters."""
-        data = struct.pack('B', usb_mode)
-        self.send_request(
-            SET_REQUEST_TYPE,
-            SET_CUR,
-            XU_CS_ID_SYSTEM,
-            SYSTEM_HARDWARE_SERVER,
-            data
-        )
+        logging.info("Device reset to default settings command sent.")
 
     def set_system_time(self, dt=None):
-            """Sets the system time. If no datetime is provided, uses the current time."""
-            if dt is None:
-                dt = datetime.now()
+        """Sets the system time. If no datetime is provided, uses the current time."""
+        if dt is None:
+            dt = datetime.now()
 
-            time_data = struct.pack('<HBBBBBHB',
-                dt.microsecond // 1000,  # milliseconds
-                dt.second,
-                dt.minute,
-                dt.hour,
-                dt.day,
-                dt.month,
-                dt.year,
-                0  # externalTimeSourceEnabled, assuming it's disabled
+        time_data = struct.pack('<HBBBBBHB',
+                                dt.microsecond // 1000,  # milliseconds
+                                dt.second,
+                                dt.minute,
+                                dt.hour,
+                                dt.day,
+                                dt.month,
+                                dt.year,
+                                0  # externalTimeSourceEnabled, assuming it's disabled
+                                )
+
+        try:
+            self.send_request(
+                SET_REQUEST_TYPE,
+                SET_CUR,
+                XU_CS_ID_SYSTEM,
+                SYSTEM_LOCALTIME,
+                data=time_data
             )
-
-            try:
-                self.send_request(
-                    SET_REQUEST_TYPE,
-                    SET_CUR,
-                    XU_CS_ID_SYSTEM,
-                    SYSTEM_LOCALTIME,
-                    time_data
-                )
-                logger.info("Time set successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Failed to set system time: {e}", exc_info=True)
-                return False
+            logging.info("System time set successfully")
+            return True
+        except Exception as e:
+            logging.error(f"Failed to set system time: {e}", exc_info=True)
+            return False
 
     def get_system_time(self):
         """Gets the current system time and returns it in a human-readable format."""
@@ -398,42 +477,28 @@ class USBProtocol:
             )
 
             if not time_data:
-                logger.warning("No time data received")
+                logging.warning("No time data received")
                 return None
 
-            logger.debug(f"Raw time data: {time_data}")
+            logging.debug(f"Raw time data: {time_data}")
 
+            # Unpack the binary data according to the correct format
             millisecond, second, minute, hour, day, month, year, external_time_source = struct.unpack('<HBBBBBHB', time_data)
 
+            # Create datetime object
             dt = datetime(year, month, day, hour, minute, second, millisecond * 1000)
 
+            # Format the datetime as a string
             formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
             return formatted_time
+
         except struct.error as e:
-            logger.error(f"Failed to unpack time data: {e}", exc_info=True)
+            logging.error(f"Failed to unpack time data: {e}", exc_info=True)
             return None
         except Exception as e:
-            logger.error(f"Failed to get system time: {e}", exc_info=True)
+            logging.error(f"Failed to get system time: {e}", exc_info=True)
             return None
-
-    def get_firmware_update_status(self):
-        """Gets the firmware update status."""
-        return self.send_request(
-            GET_REQUEST_TYPE,
-            GET_CUR,
-            XU_CS_ID_SYSTEM,
-            SYSTEM_UPDATE_FIRMWARE
-        )
-
-    def get_diagnostic_data(self):
-        """Gets the diagnostic data."""
-        return self.send_request(
-            GET_REQUEST_TYPE,
-            GET_CUR,
-            XU_CS_ID_SYSTEM,
-            SYSTEM_DIAGNOSED_DATA
-        )
 
     # Image Management Functions
     def set_image_brightness(self, channel_id, brightness):
@@ -446,6 +511,7 @@ class USBProtocol:
             IMAGE_BRIGHTNESS,
             data
         )
+        logging.info(f"Image brightness set to {brightness} on channel {channel_id}")
 
     def set_image_contrast(self, channel_id, contrast):
         """Sets the image contrast."""
@@ -457,6 +523,7 @@ class USBProtocol:
             IMAGE_CONTRAST,
             data
         )
+        logging.info(f"Image contrast set to {contrast} on channel {channel_id}")
 
     def perform_background_correction(self, channel_id):
         """Performs background correction."""
@@ -468,131 +535,85 @@ class USBProtocol:
             IMAGE_BACKGROUND_CORRECT,
             data
         )
-
-    def perform_manual_correction(self, channel_id):
-        """Performs manual correction."""
-        data = struct.pack('B', channel_id)
-        self.send_request(
-            SET_REQUEST_TYPE,
-            SET_CUR,
-            XU_CS_ID_IMAGE,
-            IMAGE_MANUAL_CORRECT,
-            data
-        )
-
-    def set_image_enhancement(self, channel_id, params):
-        """Sets image enhancement parameters."""
-        data = struct.pack('BBBBBBBB', channel_id, *params)
-        self.send_request(
-            SET_REQUEST_TYPE,
-            SET_CUR,
-            XU_CS_ID_IMAGE,
-            IMAGE_ENHANCEMENT,
-            data
-        )
-
-    def set_video_adjustment(self, channel_id, params):
-        """Sets video adjustment parameters."""
-        data = struct.pack('BBBB', channel_id, *params)
-        self.send_request(
-            SET_REQUEST_TYPE,
-            SET_CUR,
-            XU_CS_ID_IMAGE,
-            IMAGE_VIDEO_ADJUST,
-            data
-        )
+        logging.info(f"Performed background correction on channel {channel_id}")
 
     # Thermal Management Functions
-    def set_thermometry_basic_params(self, params):
-        """Sets basic thermometry parameters."""
-        data = struct.pack('BBBBBBBBfffffBfBff', *params)
-        self.send_request(
-            SET_REQUEST_TYPE,
-            SET_CUR,
-            XU_CS_ID_THERMAL,
-            THERMAL_THERMOMETRY_BASIC_PARAM,
-            data
-        )
-
-    def set_thermometry_mode(self, channel_id, mode, roi_enabled):
-        """Sets thermometry mode."""
-        data = struct.pack('BBB', channel_id, mode, roi_enabled)
-        self.send_request(
-            SET_REQUEST_TYPE,
-            SET_CUR,
-            XU_CS_ID_THERMAL,
-            THERMAL_THERMOMETRY_MODE,
-            data
-        )
-
-    def parse_received_bytes(self, data):
-        if len(data) < 5:
-            raise ValueError("数据长度不足，无法解析")
-
-        data_type = data[0]
-        total_length = struct.unpack('<I', data[1:])[0]
-
-        return total_length
- 
     def get_thermal_image_with_data(self, channel_id=0):
         """Gets the thermal image with appended temperature data using large data transfer."""
         try:
+            # Step 1: Get the total data length
             length_data = self.send_request(
                 GET_REQUEST_TYPE,
                 GET_CUR,
                 XU_CS_ID_THERMAL,
                 THERMAL_JPEGPIC_WITH_APPENDDATA
             )
-            logger.debug(f"Received length data (raw bytes): {length_data}")
-            
+
+            if not length_data or len(length_data) < 5:
+                logging.error("Failed to receive valid length data")
+                return None
+
             total_length = self.parse_received_bytes(length_data)
-            logger.info(f"Total data length: {total_length}")
-            
+            logging.debug(f"Total data length: {total_length}")
+
+            # Step 2: Prepare to receive data
             received_data = bytearray()
             while len(received_data) < total_length:
+                # Request the next chunk of data
                 chunk = self.send_request(
                     GET_REQUEST_TYPE,
                     GET_CUR,
                     XU_CS_ID_THERMAL,
                     THERMAL_JPEGPIC_WITH_APPENDDATA
                 )
-                
-                data_type, packet_number = struct.unpack('<BI', chunk[:5])
-                logger.debug(f"Received packet: Type={data_type}, Number={packet_number}")
-                
-                received_data.extend(chunk[5:])
-                logger.debug(f"Total received: {len(received_data)} bytes")
 
+                if not chunk or len(chunk) < 5:
+                    logging.error("Failed to receive valid data chunk")
+                    return None
+
+                # Parse packet header
+                data_type, packet_number = struct.unpack('<BI', bytes(chunk[:5]))
+                logging.debug(f"Received packet: Type={data_type}, Number={packet_number}")
+
+                # Extract and append actual data
+                received_data.extend(chunk[5:])
+                logging.debug(f"Total received: {len(received_data)} bytes")
+
+            # Parse the received data
             header_size = struct.calcsize('<BIIIIBBII')
-            logger.debug(f"header_size: {header_size}")
+            logging.debug(f"Header size: {header_size} bytes")
             if len(received_data) < header_size:
                 raise ValueError(f"Received data is too short. Expected at least {header_size} bytes, got {len(received_data)}")
 
             header = struct.unpack('<BIIIIBBII', received_data[:header_size])
-            
+
             channel_id, jpeg_len, jpeg_width, jpeg_height, p2p_data_len, is_freeze_data, p2p_data_type, scale, offset = header
 
-            logger.info(f"Parsed header: channel_id={channel_id}, jpeg_len={jpeg_len}, "
-                f"jpeg_width={jpeg_width}, jpeg_height={jpeg_height}, "
-                f"p2p_data_len={p2p_data_len}, is_freeze_data={is_freeze_data}, "
-                f"p2p_data_type={p2p_data_type}, scale={scale}, offset={offset}")
+            logging.debug(f"Parsed header: channel_id={channel_id}, jpeg_len={jpeg_len}, "
+                          f"jpeg_width={jpeg_width}, jpeg_height={jpeg_height}, "
+                          f"p2p_data_len={p2p_data_len}, is_freeze_data={is_freeze_data}, "
+                          f"p2p_data_type={p2p_data_type}, scale={scale}, offset={offset}")
 
-            jpeg_data = received_data[header_size:header_size+jpeg_len]
-            logger.debug(f"JPEG data length: {len(jpeg_data)}")
+            # Extract JPEG image
+            jpeg_data = received_data[header_size:header_size + jpeg_len]
+            logging.debug(f"JPEG data length: {len(jpeg_data)} bytes")
             image = Image.open(io.BytesIO(jpeg_data))
 
+            # Extract temperature data
             temp_data_start = header_size + jpeg_len
-            temp_data = received_data[temp_data_start:temp_data_start+p2p_data_len]
-            logger.debug(f"Temperature data length: {len(temp_data)}")
+            temp_data = received_data[temp_data_start:temp_data_start + p2p_data_len]
+            logging.debug(f"Temperature data length: {len(temp_data)} bytes")
 
+            # Convert temperature data to numpy array
             if p2p_data_type == 2:  # short integer
                 temp_array = np.frombuffer(temp_data, dtype=np.uint16).reshape(jpeg_height, jpeg_width)
                 temp_array = temp_array / scale + offset - 273.15
             elif p2p_data_type == 4:  # float
                 temp_array = np.frombuffer(temp_data, dtype=np.float32).reshape(jpeg_height, jpeg_width)
 
-            logger.info(f"Temperature array shape: {temp_array.shape}")
-            logger.info(f"Temperature range: min={np.min(temp_array):.2f}, max={np.max(temp_array):.2f}, mean={np.mean(temp_array):.2f}")
+            logging.debug(f"Temperature array shape: {temp_array.shape}")
+            logging.info(f"Temperature range: min={np.min(temp_array):.2f}°C, "
+                         f"max={np.max(temp_array):.2f}°C, mean={np.mean(temp_array):.2f}°C")
 
             return {
                 'image': image,
@@ -601,33 +622,50 @@ class USBProtocol:
             }
 
         except Exception as e:
-            logger.error(f"Error in get_thermal_image_with_data: {e}", exc_info=True)
+            logging.error(f"Error in get_thermal_image_with_data: {e}", exc_info=True)
             return None
+
+    def parse_received_bytes(self, data):
+        # Ensure data length is sufficient
+        if len(data) < 5:
+            raise ValueError("Data length insufficient for parsing")
+
+        # Parse data
+        data_type = data[0]  # Data type, 1 byte
+        total_length = struct.unpack('<I', bytes(data[1:5]))[0]  # Total length, 4 bytes, little-endian
+
+        return total_length
 
     def save_thermal_data(self, thermal_data, base_filename):
         """Saves the thermal image and temperature data with timestamp."""
         if thermal_data is None:
-            logger.warning("No thermal data to save.")
+            logging.warning("No thermal data to save.")
             return
 
+        # Create a timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+        # Create a directory for the output if it doesn't exist
         output_dir = os.path.join('thermal_output', timestamp)
         os.makedirs(output_dir, exist_ok=True)
 
+        # Combine base filename with timestamp
         filename = f"{base_filename}_{timestamp}"
 
+        # Save the image if it exists
         if thermal_data['image'] is not None:
             image_filename = os.path.join(output_dir, f"{filename}_thermal.jpg")
             thermal_data['image'].save(image_filename)
-            logger.info(f"Thermal image saved as {image_filename}")
+            logging.info(f"Thermal image saved as {image_filename}")
         else:
-            logger.warning("No thermal image to save.")
+            logging.warning("No thermal image to save.")
 
+        # Save the temperature data as CSV with 2 decimal places
         csv_filename = os.path.join(output_dir, f"{filename}_temperature.csv")
         np.savetxt(csv_filename, thermal_data['temperature_data'], delimiter=',', fmt='%.2f')
-        logger.info(f"Temperature data saved as {csv_filename}")
+        logging.info(f"Temperature data saved as {csv_filename}")
 
+        # Save metadata
         metadata_filename = os.path.join(output_dir, f"{filename}_metadata.txt")
         with open(metadata_filename, 'w') as metafile:
             metafile.write(f"Timestamp: {timestamp}\n")
@@ -640,10 +678,11 @@ class USBProtocol:
             metafile.write(f"Min temperature: {np.min(thermal_data['temperature_data']):.2f}°C\n")
             metafile.write(f"Max temperature: {np.max(thermal_data['temperature_data']):.2f}°C\n")
             metafile.write(f"Average temperature: {np.mean(thermal_data['temperature_data']):.2f}°C\n")
-        logger.info(f"Metadata saved as {metadata_filename}")
+        logging.info(f"Metadata saved as {metadata_filename}")
 
-        logger.info(f"All files saved in directory: {output_dir}")
-            
+        logging.info(f"All files saved in directory: {output_dir}")
+
+
 class ErrorCodeHandler:
     def __init__(self, communication):
         self.communication = communication
@@ -655,103 +694,83 @@ class ErrorCodeHandler:
                 GET_CUR,
                 XU_CS_ID_ERROR_CODE
             )
+            if not response:
+                logging.warning("No error code data received")
+                return None
             error_code = response[0]
-            logger.info(f"Device Error Code: {ERROR_CODES.get(error_code, 'Unknown Error Code')}")
+            error_message = ERROR_CODES.get(error_code, 'Unknown Error Code')
+            logging.info(f"Device Error Code: {error_code} - {error_message}")
             return error_code
         except Exception as e:
-            logger.error(f"Failed to retrieve error code: {e}", exc_info=True)
+            logging.error(f"Failed to retrieve error code: {e}", exc_info=True)
             return None
 
-class UVCDeviceManager:
-    """Manages the UVC device initialization and control."""
-
-    def find_device(self):
-        devices = uvc.device_list()
-        logger.info(f"Available devices: {devices}")
-
-        if not devices:
-            logger.warning("No UVC devices found.")
-            return None
-
-        device_info = devices[0]
-        logger.info(f"Using device: {device_info['name']}")
-
-        vendor_id = device_info['idVendor']
-        product_id = device_info['idProduct']
-
-        dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
-
-        if dev is None:
-            raise ValueError("UVC Device not found via pyusb")
-
-        for i in range(dev.get_active_configuration().bNumInterfaces):
-            if dev.is_kernel_driver_active(i):
-                try:
-                    dev.detach_kernel_driver(i)
-                except usb.core.USBError as e:
-                    logger.error(f"Could not detach kernel driver from interface({i}): {str(e)}")
-                    sys.exit(1)
-
-        return dev
-
-class Main:
-    def __init__(self):
-        self.device_manager = UVCDeviceManager()
-        self.communication = None
-        self.protocol = None
-        self.error_handler = None
-
-    def initialize_components(self):
-        dev = self.device_manager.find_device()
-        if not dev:
-            logger.error("Failed to find and initialize UVC device.")
-            return False
-
-        self.communication = USBCommunication(dev)
-        self.protocol = USBProtocol(self.communication)
-        self.error_handler = ErrorCodeHandler(self.communication)
-        logger.info("UVC device connected and initialized")
-        return True
-
-    def run(self):
-        if not self.initialize_components():
-            return
-
-        try:
-            version = self.protocol.get_protocol_version()
-            if version:
-                logger.info(f"Protocol Version: {version}")
-            else:
-                logger.warning("Failed to get protocol version")
-                return
-
-            device_info = self.protocol.get_device_info()
-            if device_info:
-                logger.info("Device Info:")
-                for key, value in device_info.items():
-                    logger.info(f"  {key}: {value}")
-            else:
-                logger.warning("Failed to get device info")
-
-            current_time = self.protocol.get_system_time()
-            logger.info(f"Current time: {current_time}")
-
-            thermal_data = self.protocol.get_thermal_image_with_data()
-            if thermal_data:
-                self.protocol.save_thermal_data(thermal_data, "thermal_capture")
-            else:
-                logger.warning("Failed to get thermal image and data")
-
-            self.error_handler.get_error_code()
-
-        except Exception as e:
-            logger.exception(f"An error occurred during operation: {e}")
-            self.error_handler.get_error_code()
 
 if __name__ == "__main__":
     # 设置日志级别
     log_level = logging.INFO  # 可以根据需要更改为 DEBUG, WARNING, ERROR, 或 CRITICAL
     logging.getLogger().setLevel(log_level)
-    
-    main = Main()
-    main.run()
+
+    # 初始化红外驱动
+    driver = InfraredDriver()
+    if not driver.find_device():
+        sys.exit("Failed to initialize the infrared driver.")
+
+    # 获取协议版本
+    protocol_version = driver.get_protocol_version()
+    if protocol_version:
+        print(f"Protocol Version: {protocol_version}")
+    else:
+        print("Failed to get protocol version")
+
+    # 获取设备信息
+    device_info = driver.get_device_info()
+    if device_info:
+        print("Device Info:")
+        for key, value in device_info.items():
+            print(f"  {key}: {value}")
+    else:
+        print("Failed to get device info")
+
+    # 设置系统时间
+    if driver.set_system_time():
+        print("System time set successfully")
+
+    # 获取系统时间
+    current_time = driver.get_system_time()
+    if current_time:
+        print(f"Current System Time: {current_time}")
+    else:
+        print("Failed to get system time")
+
+    # 设置图像亮度
+    driver.set_image_brightness(channel_id=0, brightness=50)
+    print("Image brightness set to 50")
+
+    # 设置图像对比度
+    driver.set_image_contrast(channel_id=0, contrast=50)
+    print("Image contrast set to 50")
+
+    # 执行背景校正
+    driver.perform_background_correction(channel_id=0)
+    print("Background correction performed")
+
+    # 获取热成像数据
+    thermal_data = driver.get_thermal_image_with_data(channel_id=0)
+    if thermal_data:
+        driver.save_thermal_data(thermal_data, base_filename="thermal_capture")
+    else:
+        print("Failed to get thermal image and data")
+
+    # 获取错误代码
+    error_code = driver.get_error_code()
+    if error_code is not None:
+        print(f"Error Code: {error_code}")
+
+    # 重启设备
+    driver.reboot_device()
+    print("Device reboot command sent")
+
+    # 恢复默认设置
+    driver.reset_to_default()
+    print("Device reset to default settings command sent")

@@ -1,5 +1,0 @@
-save_paths:
-  rgb: /camera_code/data/rgb
-  depth: /camera_code/data/depth
-  inf: /camera_code/data/inf
-  ply: /camera_code/data/ply
