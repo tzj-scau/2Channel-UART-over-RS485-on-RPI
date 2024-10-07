@@ -66,7 +66,8 @@ class MotorDriver:
     def enable_motor(self, enable=True, sync_flag=False):
         values = [0xAB << 8 | 0x01 if enable else 0x00, (0x01 if sync_flag else 0x00) << 8 | 0x00]
         try:
-            self.instrument.write_registers(Registers.ENABLE_CONTROL, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            # self.instrument.write_registers(Registers.ENABLE_CONTROL, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            self.instrument.write_registers(Registers.ENABLE_CONTROL, values)
         except minimalmodbus.NoResponseError:
             print("No response from instrument during enable_motor, continuing...")
         except minimalmodbus.ModbusException as e:
@@ -304,7 +305,8 @@ class MotorDriver:
             params.get('clog_time', 0),
         ])
         try:
-            self.instrument.write_registers(Registers.MODIFY_DRIVER_PARAMS, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            self.instrument.write_registers(Registers.MODIFY_DRIVER_PARAMS, values)
+            # self.instrument.write_registers(Registers.MODIFY_DRIVER_PARAMS, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
         except minimalmodbus.NoResponseError:
             print("No response from instrument during modify_driver_params, continuing...")
         except minimalmodbus.ModbusException as e:
@@ -354,7 +356,8 @@ class MotorDriver:
         """Set PID parameters"""
         values = [0x01 if store else 0x00, pp_trapezoid, pp_direct, vp, vi]
         try:
-            self.instrument.write_registers(Registers.SET_PID, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            # self.instrument.write_registers(Registers.SET_PID, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            self.instrument.write_registers(Registers.SET_PID, values)
             print("PID parameters updated.")
         except minimalmodbus.NoResponseError:
             print("No response from instrument during set_pid_params, continuing...")
@@ -372,7 +375,8 @@ class MotorDriver:
             (timeout >> 16) & 0xFFFF,
         ]
         try:
-            self.instrument.write_registers(Registers.SET_HOMING_PARAMS, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            # self.instrument.write_registers(Registers.SET_HOMING_PARAMS, values, functioncode=FUNCTION_WRITE_MULTIPLE_REGISTERS)
+            self.instrument.write_registers(Registers.SET_HOMING_PARAMS, values)
             print("Homing parameters updated.")
         except minimalmodbus.NoResponseError:
             print("No response from instrument during set_homing_params, continuing...")

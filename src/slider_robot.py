@@ -238,9 +238,9 @@ def main():
         driver_params = robot.read_driver_params()
         logging.info(f"Driver parameters: {driver_params}")
 
-        # 6. Modify PID parameters
-        logging.info("Updating PID Parameters")
-        robot.set_pid_params(pp_trapezoid=100, pp_direct=200, vp=300, vi=400)
+        # # 6. Modify PID parameters
+        # logging.info("Updating PID Parameters")
+        # robot.set_pid_params(pp_trapezoid=100, pp_direct=200, vp=300, vi=400)
 
         # 7. Test emergency stop and resume
         logging.info("Testing Emergency Stop and Resume")
